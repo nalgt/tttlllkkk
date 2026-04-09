@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CapCut Clone Studio</title>
+    
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #111; color: white; margin: 0; text-align: center; user-select: none; }
+        
+        /* Auth Overlay */
+        #authOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 999; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .login-box { background: #222; padding: 20px; border-radius: 10px; width: 280px; }
+        input { width: 90%; padding: 10px; margin: 5px; border-radius: 5px; border: none; }
+
+        /* Preview Area */
+        .preview-window { width: 100%; max-width: 600px; margin: auto; background: #000; position: relative; }
+        canvas { width: 100%; display: block; border-bottom: 2px solid #f39c12; }
+        
+        /* Timeline - CapCut Style */
+        .timeline-container { background: #1a1a1a; padding: 10px; border-top: 1px solid #333; }
+        #timeline { 
+            display: flex; align-items: center; gap: 5px; height: 100px; 
+            overflow-x: auto; background: #0a0a0a; padding: 10px; border-radius: 5px;
+        }
+        .clip { 
+            min-width: 80px; height: 70px; background: #f39c12; color: black; 
+            border-radius: 4px; display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: bold; cursor: grab; position: relative;
+        }
+        .clip.dragging { opacity: 0.5; border: 2px dashed white; }
+
+        /* Controls */
+        .toolbar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; padding: 10px; }
+        button, label { background: #333; color: white; border: none; padding: 10px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+        .active-btn { background: #f39c12; color: black; }
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="authOverlay">
+    <h2>VIDEO EDITOR PRO</h2>
+    <div class="login-box">
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="pass" placeholder="Password">
+        <button onclick="handleAuth()" style="background:#f39c12; width:100%; margin-top:10px;">ULAZ</button>
+    </div>
+    <button onclick="startAsGuest()" style="background:none; color:gray; margin-top:10px;">Gost</button>
+</div>
+
+<div class="preview-window">
+    <div id="status" style="font-size: 10px; color: #f39c12;">Ready</div>
+    <canvas id="mainCanvas"></canvas>
+    <video id="vSource" autoplay muted playsinline style="display:none;"></video>
+</div>
+
+<div class="toolbar">
+    <button id="recBtn" style="grid-column: span 3; background:red;">🔴 SNIMAJ FINALNI VIDEO</button>
+    <label for="videoIn">📂 UBACI VIDEO</label>
+    <input type="file" id="videoIn" accept="video/*">
+    <label for="imgIn">🖼️ STIKER</label>
+    <input type="file" id="imgIn" accept="image/*">
+    <button onclick="setSpeed(0.5)">0.5x (Slow)</button>
+    <button onclick="setSpeed(1)">1x (Norm)</button>
+    <button onclick="setSpeed(2)">2x (Fast)</button>
+    <button onclick="startScreen()" style="grid-column: span 3; background:#9b59b6;">🖥️ SNIMAJ EKRAN / POZADINU</button>
+</div>
+
+<div class="timeline-container">
+    <div id="timeline">
+        <!-- Klipovi se ovde dodaju -->
+    </div>
+    <p style="font-size: 10px; color: #555;">Prevucite klipove da promenite redosled</p>
+</div>
+
+<script>
+    var isGuest = true, recorder, chunks = [], filter = "none", sticker = new Image();
+    var canvas = document.getElementById('mainCanvas'), ctx = canvas.getContext('2d');
+    var video = document.getElementById('vSource'), timeline = document.getElementById('timeline');
+
+    // 1. Drag & Drop Logika
+    timeline.addEventListener('dragover', e => {
+        e.preventDefault();
+        const afterElement = getDragAfterElement(timeline, e.clientX);
+        const draggable = document.querySelector('.dragging');
+        if (afterElement == null) {
+            timeline.appendChild(draggable);
+        } else {
+            timeline.insertBefore(draggable, afterElement);
+        }
+    });
+
+    function getDragAfterElement(container, x) {
+        const draggableElements = [...container.querySelectorAll('.clip:not(.dragging)')];
+        return draggableElements.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = x - box.left - box.width / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset: offset, element: child };
+            } else {
+                return closest;
+            }
+        }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+
+    // 2. Brzina i Editor
+    function setSpeed(s) { 
+        video.playbackRate = s; 
+        document.querySelectorAll('.clip').forEach(c => c.style.width = (80 * s) + "px");
+    }
+
+    function addClipToTimeline(name) {
+        const clip = document.createElement('div');
+        clip.className = "clip";
+        clip.draggable = true;
+        clip.innerText = name;
+        clip.addEventListener('dragstart', () => clip.classList.add('dragging'));
+        clip.addEventListener('dragend', () => clip.classList.remove('dragging'));
+        timeline.appendChild(clip);
+    }
+
+    // 3. Kamera i Video
+    async function initCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+        video.srcObject = stream;
+        render();
+    }
+
+    async function startScreen() {
+        video.srcObject = await navigator.mediaDevices.getDisplayMedia({video:true, audio:true});
+    }
+
+    function render() {
+        canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
+        ctx.filter = filter;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        ctx.filter = "none";
+        if(sticker.src) ctx.drawImage(sticker, 20, 20, 100, 100);
+        requestAnimationFrame(render);
+    }
+
+    // 4. Fajlovi
+    document.getElementById('videoIn').onchange = e => {
+        video.srcObject = null;
+        video.src = URL.createObjectURL(e.target.files[0]);
+        addClipToTimeline(e.target.files[0].name.substring(0,8));
+    };
+
+    document.getElementById('imgIn').onchange = e => {
+        const reader = new FileReader();
+        reader.onload = ev => sticker.src = ev.target.result;
+        reader.readAsDataURL(e.target.files[0]);
+    };
+
+    // 5. Auth i Guest
+    function startAsGuest() { document.getElementById('authOverlay').style.display='none'; initCamera(); }
+    function handleAuth() { 
+        localStorage.setItem('user', document.getElementById('username').value);
+        document.getElementById('authOverlay').style.display='none'; 
+        initCamera(); 
+    }
+
+    // 6. Snimanje finalnog fajla
+    const recBtn = document.getElementById('recBtn');
+    recBtn.onclick = () => {
+        if (recorder && recorder.state === "recording") {
+            recorder.stop();
+            recBtn.innerText = "🔴 SNIMAJ FINALNI VIDEO";
+        } else {
+            chunks = [];
+            recorder = new MediaRecorder(canvas.captureStream(30));
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, {type:'video/mp4'});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'edit_fajl.mp4'; a.click();
+            };
+            recorder.start();
+            recBtn.innerText = "⏹️ ZAUSTAVI I SAČUVAJ";
+        }
+    };
+</script>
+</body>
+</html>
