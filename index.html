@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GGLOL Studio - Ultimate Editor</title>
+    <style>
+        :root { --accent: #f39c12; --bg: #0b0b0b; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #authOverlay { position: fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+        .login-box { background:#1a1a1a; padding:25px; border-radius:15px; width:280px; text-align:center; }
+        input { width:90%; padding:10px; margin:8px 0; border-radius:8px; border:none; background:#2a2a2a; color:white; }
+        
+        #preview-zone { flex: 1.5; background:#000; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; cursor: pointer; }
+        canvas { width: 95%; max-width: 900px; aspect-ratio: 16/9; background:#111; border-radius:10px; border: 2px solid #333; }
+        
+        .yt-bar { width:95%; max-width:900px; display:flex; align-items:center; gap:10px; padding:10px; }
+        #seekbar { flex:1; accent-color: red; cursor: pointer; }
+
+        #music-library { position: fixed; right: -300px; top: 0; width: 280px; height: 100%; background: #151515; z-index: 1000; transition: 0.3s; border-left: 2px solid var(--accent); padding: 10px; overflow-y: auto; }
+        #music-library.open { right: 0; }
+        .music-item { background: #222; padding: 12px; margin-bottom: 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+
+        .toolbar { background:#111; padding:12px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; border-top:1px solid #333; }
+        button, label { background:#333; color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:12px; }
+        button:hover { background:var(--accent); color:black; }
+
+        #timeline { height: 160px; background:#0a0a0a; overflow-x:auto; padding:10px; position:relative; }
+        .track { height:35px; background:rgba(255,255,255,0.03); margin-bottom:5px; display:flex; position:relative; border-radius:5px; border: 1px dashed #333; }
+        .marker { position: absolute; height: 100%; cursor: crosshair; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: bold; }
+        #playhead { position:absolute; top:0; left:0; width:2px; height:100%; background:red; z-index:100; pointer-events:none; }
+    </style>
+</head>
+<body>
+
+<div id="authOverlay">
+    <h1 style="color:var(--accent);">VIDEO STUDIO PRO</h1>
+    <div class="login-box">
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="pass" placeholder="Password">
+        <button onclick="appStart()" style="background:var(--accent); color:black; width:100%;">START</button>
+    </div>
+</div>
+
+<div id="music-library">
+    <button onclick="toggleMusic()" style="width:100%; background:#e74c3c; color:white; border:none; padding:10px; margin-bottom:10px;">ZATVORI X</button>
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Vine Boom')">🔊 Vine Boom</div>
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Bruh')">🔊 Bruh</div>
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Fail')">🔊 Fail</div>
+</div>
+
+<div id="preview-zone" onclick="togglePlay()">
+    <canvas id="mainCanvas"></canvas>
+    <video id="vSource" style="display:none;" playsinline crossorigin="anonymous"></video>
+    <div class="yt-bar" onclick="event.stopPropagation()">
+        <button onclick="togglePlay()" id="playBtn">▶</button>
+        <input type="range" id="seekbar" value="0" step="0.01">
+        <span id="timer">00:00</span>
+    </div>
+</div>
+
+<div class="toolbar">
+    <label for="vIn">📂 IMPORT</label>
+    <input type="file" id="vIn" accept="video/*" style="display:none;">
+    <button onclick="toggleMusic()" style="background:#f39c12; color:black;">🎶 OG SOUNDS</button>
+    <input type="text" id="txtIn" placeholder="Tekst..." style="width:100px; background:#222; color:white; border:none; padding:10px; border-radius:5px;">
+    <button onclick="addText()" style="background:#9b59b6;">➕ TEKST</button>
+    <button onclick="setVoice(1.5, 0.5)">🐿️ PISKAV (Tiše)</button>
+    <button onclick="setVoice(0.7, 2.0)">👹 GRUB (Glasnije)</button>
+    <button onclick="setVoice(1.0, 1.0)">🎤 RESET</button>
+    <button onclick="fastExport()" style="background:#27ae60;">💾 EXPORT</button>
+</div>
+
+<div id="timeline">
+    <div id="playhead"></div>
+    <div class="track" id="vTrack"></div>
+    <div class="track" id="tTrack" style="background:rgba(155, 89, 182, 0.1);"></div>
+    <div class="track" id="aTrack" style="background:rgba(52, 152, 219, 0.1);"></div>
+</div>
+
+<script>
+    var video = document.getElementById('vSource');
+    var canvas = document.getElementById('mainCanvas');
+    var ctx = canvas.getContext('2d');
+    var seekbar = document.getElementById('seekbar');
+    var audioCtx, biquadFilter, gainNode, sourceNode, destNode;
+    var activeTexts = [], activeSounds = [];
+
+    async function appStart() {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        document.getElementById('authOverlay').style.display = 'none';
+        render();
+    }
+
+    function setupAudio() {
+        if (!sourceNode && audioCtx) {
+            video.crossOrigin = "anonymous";
+            sourceNode = audioCtx.createMediaElementSource(video);
+            biquadFilter = audioCtx.createBiquadFilter();
+            gainNode = audioCtx.createGain(); // Za kontrolu jačine tona
+            destNode = audioCtx.createMediaStreamDestination();
+            
+            sourceNode.connect(biquadFilter);
+            biquadFilter.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.connect(destNode);
+        }
+    }
+
+    function toggleMusic() { document.getElementById('music-library').classList.toggle('open'); }
+
+    document.getElementById('vIn').onchange = (e) => {
+        video.src = URL.createObjectURL(e.target.files[0]);
+        video.onloadeddata = () => {
+            seekbar.max = video.duration;
+            canvas.width = 1280; canvas.height = 720;
+            updateTimeline();
+        };
+    };
+
+    function setVoice(pitch, volume) {
+        setupAudio();
+        video.playbackRate = pitch;
+        if(biquadFilter) {
+            biquadFilter.type = pitch > 1 ? "highpass" : "lowpass";
+            biquadFilter.frequency.setTargetAtTime(pitch > 1 ? 3000 : 500, audioCtx.currentTime, 0.1);
+        }
+        if(gainNode) {
+            gainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+        }
+    }
+
+    function render() {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        activeTexts.forEach((t, index) => {
+            if(video.currentTime >= t.start && video.currentTime <= t.end) {
+                ctx.fillStyle = "white"; ctx.font = "bold 60px sans-serif";
+                ctx.textAlign = "center"; ctx.shadowColor = "black"; ctx.shadowBlur = 15;
+                ctx.fillText(t.content, canvas.width/2, 620);
+            }
+        });
+        activeSounds.forEach(s => {
+            if(video.currentTime >= s.start && !s.played && !video.paused) {
+                s.audio.currentTime = 0; s.audio.play(); s.played = true;
+            }
+            if(video.currentTime < s.start) s.played = false;
+        });
+        requestAnimationFrame(render);
+    }
+
+    function togglePlay() { 
+        if(video.paused) { video.play(); document.getElementById('playBtn').innerText = "⏸"; } 
+        else { video.pause(); document.getElementById('playBtn').innerText = "▶"; }
+    }
+
+    function addText() {
+        let val = document.getElementById('txtIn').value;
+        if(val) {
+            activeTexts.push({ content: val, start: video.currentTime, end: video.currentTime + 2 });
+            document.getElementById('txtIn').value = "";
+            updateTimeline();
+        }
+    }
+
+    function addSound(url, name) {
+        let s = new Audio(url); s.crossOrigin = "anonymous";
+        activeSounds.push({ audio: s, start: video.currentTime, name: name, played: false });
+        updateTimeline();
+    }
+
+    function updateTimeline() {
+        document.getElementById('vTrack').innerHTML = "";
+        document.getElementById('tTrack').innerHTML = "";
+        document.getElementById('aTrack').innerHTML = "";
+        
+        activeTexts.forEach((t, i) => {
+            let m = document.createElement('div');
+            m.className = "marker"; m.style.left = (t.start / video.duration * 100) + "%";
+            m.style.width = (2 / video.duration * 100) + "%"; m.style.background = "#9b59b6";
+            m.innerText = "X"; m.onclick = () => { activeTexts.splice(i, 1); updateTimeline(); };
+            document.getElementById('tTrack').appendChild(m);
+        });
+
+        activeSounds.forEach((s, i) => {
+            let m = document.createElement('div');
+            m.className = "marker"; m.style.left = (s.start / video.duration * 100) + "%";
+            m.style.width = "10px"; m.style.background = "#3498db";
+            m.innerText = "X"; m.onclick = () => { activeSounds.splice(i, 1); updateTimeline(); };
+            document.getElementById('aTrack').appendChild(m);
+        });
+    }
+
+    seekbar.oninput = (e) => { video.currentTime = e.target.value; };
+    video.ontimeupdate = () => {
+        seekbar.value = video.currentTime;
+        document.getElementById('timer').innerText = Math.floor(video.currentTime) + "s";
+        document.getElementById('playhead').style.left = (video.currentTime / video.duration * 100) + "%";
+    };
+
+    async function fastExport() {
+        setupAudio();
+        const stream = new MediaStream([...canvas.captureStream(30).getTracks(), ...destNode.stream.getTracks()]);
+        const recorder = new MediaRecorder(stream);
+        let chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob(chunks, {type:'video/mp4'}));
+            a.download = 'GGLOL_Edit.mp4'; a.click();
+        };
+        video.currentTime = 0; recorder.start(); video.play();
+        video.onended = () => recorder.stop();
+    }
+</script>
+</body>
+</html>
