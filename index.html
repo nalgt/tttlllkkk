@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GGLOL Pro Video Editor</title>
+    <style>
+        :root { --accent: #f39c12; --bg: #0b0b0b; --panel: #1a1a1a; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* Preview */
+        #preview-box { flex: 1.5; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        canvas { width: 90%; max-width: 800px; aspect-ratio: 16/9; background: #111; border-radius: 8px; border: 1px solid #333; }
+
+        /* YT Style Seekbar */
+        .yt-controls { width: 90%; max-width: 800px; display: flex; align-items: center; gap: 10px; padding: 10px; }
+        #seekbar { flex: 1; accent-color: red; cursor: pointer; }
+
+        /* Timeline Area */
+        #timeline-area { height: 220px; background: var(--panel); border-top: 2px solid #333; overflow-x: auto; position: relative; padding: 10px; }
+        .track { height: 40px; background: rgba(255,255,255,0.03); margin-bottom: 5px; display: flex; position: relative; border-radius: 4px; }
+        .frame { min-width: 50px; height: 100%; border-right: 1px solid #333; font-size: 9px; color: #666; display: flex; align-items: center; padding-left: 2px; }
+        #playhead { position: absolute; top: 0; left: 0; width: 2px; height: 100%; background: red; z-index: 100; pointer-events: none; }
+
+        /* Toolbar */
+        .toolbar { background: #111; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; border-top: 1px solid #333; }
+        button { background: #333; color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; }
+        button:hover { background: var(--accent); color: black; }
+        .btn-split { background: #3498db; }
+        .btn-text { background: #9b59b6; }
+        input[type="text"] { background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 6px; width: 150px; }
+    </style>
+</head>
+<body>
+
+<div id="preview-box">
+    <canvas id="mainCanvas"></canvas>
+    <video id="vSource" style="display:none;" crossorigin="anonymous"></video>
+    <div class="yt-controls">
+        <button onclick="togglePlay()">▶/⏸</button>
+        <input type="range" id="seekbar" value="0" step="0.01">
+        <span id="timer">00:00</span>
+    </div>
+</div>
+
+<div class="toolbar">
+    <label for="vIn" style="background:#444; padding:10px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:bold;">📂 IMPORT</label>
+    <input type="file" id="vIn" accept="video/*" style="display:none;">
+    
+    <input type="text" id="txtInput" placeholder="Tekst...">
+    <button class="btn-text" onclick="addTextAtCurrentTime()">➕ DODAJ TEKST OVDE</button>
+    <button class="btn-split" onclick="splitTimeline()">✂️ PREPOLOVI FREJMOVE</button>
+    
+    <button onclick="playSound('https://soundjay.com')">🎵 KLIK</button>
+    <button onclick="playSound('https://soundjay.com')">🎺 FAIL</button>
+    
+    <button id="exportBtn" style="background:#27ae60;">💾 EXPORT</button>
+</div>
+
+<div id="timeline-area">
+    <div id="playhead"></div>
+    <div class="track" id="vTrack"></div>
+    <div class="track" id="textMarkers" style="background: rgba(155, 89, 182, 0.1);"></div>
+</div>
+
+<script>
+    const video = document.getElementById('vSource');
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+    const seekbar = document.getElementById('seekbar');
+    const vTrack = document.getElementById('vTrack');
+    const txtInput = document.getElementById('txtInput');
+    
+    let activeTexts = []; 
+    let zoomLevel = 1; // Za prepolovi frejmove
+
+    // 1. Učitavanje Videa
+    document.getElementById('vIn').onchange = (e) => {
+        const file = e.target.files[0];
+        if(!file) return;
+        video.src = URL.createObjectURL(file);
+        video.onloadedmetadata = () => {
+            seekbar.max = video.duration;
+            drawTimeline();
+            render();
+        };
+    };
+
+    // 2. Timeline i Split funkcija
+    function drawTimeline() {
+        vTrack.innerHTML = "";
+        let segments = Math.floor(video.duration * zoomLevel);
+        for(let i=0; i <= segments; i++) {
+            let f = document.createElement('div');
+            f.className = 'frame';
+            f.style.minWidth = (50 / zoomLevel) + "px";
+            f.innerText = (i / zoomLevel).toFixed(1) + "s";
+            vTrack.appendChild(f);
+        }
+    }
+
+    function splitTimeline() {
+        zoomLevel *= 2; // Svaki klik prepolovi (uveća) skalu frejmova
+        drawTimeline();
+        updatePlayhead();
+    }
+
+    // 3. Tekst u videu (2 sekunde trajanja)
+    function addTextAtCurrentTime() {
+        if(!txtInput.value) return;
+        activeTexts.push({
+            content: txtInput.value,
+            start: video.currentTime,
+            end: video.currentTime + 2
+        });
+        txtInput.value = "";
+        renderMarkers();
+    }
+
+    function renderMarkers() {
+        const markerBar = document.getElementById('textMarkers');
+        markerBar.innerHTML = "";
+        activeTexts.forEach(t => {
+            let m = document.createElement('div');
+            m.style.position = "absolute";
+            m.style.left = (t.start / video.duration * 100) + "%";
+            m.style.width = (2 / video.duration * 100) + "%";
+            m.style.height = "100%";
+            m.style.background = "#9b59b6";
+            m.style.borderRadius = "4px";
+            markerBar.appendChild(m);
+        });
+    }
+
+    // 4. Besplatni zvukovi
+    function playSound(url) {
+        new Audio(url).play();
+    }
+
+    // 5. Kontrole i Render
+    function togglePlay() { video.paused ? video.play() : video.pause(); }
+    
+    function updatePlayhead() {
+        const container = document.getElementById('timeline-area');
+        let pos = (video.currentTime / video.duration) * vTrack.scrollWidth;
+        document.getElementById('playhead').style.left = pos + "px";
+    }
+
+    video.ontimeupdate = () => {
+        seekbar.value = video.currentTime;
+        document.getElementById('timer').innerText = Math.floor(video.currentTime) + "s";
+        updatePlayhead();
+    };
+
+    seekbar.oninput = () => { video.currentTime = seekbar.value; };
+
+    function render() {
+        canvas.width = 1280; canvas.height = 720;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        activeTexts.forEach(t => {
+            if(video.currentTime >= t.start && video.currentTime <= t.end) {
+                ctx.fillStyle = "white";
+                ctx.font = "bold 60px sans-serif";
+                ctx.textAlign = "center";
+                ctx.shadowColor = "black";
+                ctx.shadowBlur = 15;
+                ctx.fillText(t.content, canvas.width/2, canvas.height - 100);
+            }
+        });
+        requestAnimationFrame(render);
+    }
+
+    // Export
+    document.getElementById('exportBtn').onclick = () => {
+        const stream = canvas.captureStream(30);
+        const recorder = new MediaRecorder(stream);
+        let chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob(chunks, {type:'video/mp4'}));
+            a.download = 'GGLOL_Edit.mp4'; a.click();
+        };
+        recorder.start();
+        video.currentTime = 0; video.play();
+        video.onended = () => recorder.stop();
+        alert("Exportovanje traje koliko i video... sačekaj.");
+    };
+</script>
+</body>
+</html>
