@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GGLOL Studio - OG & Export Fix</title>
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
+    <style>
+        :root { --accent: #f39c12; --bg: #0b0b0b; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #authOverlay { position: fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+        .login-box { background:#1a1a1a; padding:25px; border-radius:15px; width:280px; text-align:center; }
+        input { width:90%; padding:10px; margin:8px 0; border-radius:8px; border:none; background:#2a2a2a; color:white; }
+        #preview-zone { flex: 1.2; background:#000; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; }
+        canvas { width: 95%; max-width: 800px; aspect-ratio: 16/9; background:#111; border-radius:10px; border:1px solid #333; }
+        #music-library { position: fixed; right: -300px; top: 0; width: 280px; height: 100%; background: #151515; z-index: 1000; transition: 0.3s; border-left: 2px solid var(--accent); padding: 10px; overflow-y: auto; }
+        #music-library.open { right: 0; }
+        .music-item { background: #222; padding: 12px; margin-bottom: 8px; border-radius: 8px; cursor: pointer; font-size: 13px; border: 1px solid #333; }
+        .music-item:hover { background: var(--accent); color: black; }
+        .toolbar { background:#111; padding:10px; display:flex; flex-wrap:wrap; gap:5px; justify-content:center; border-top:1px solid #333; }
+        button, label { background:#333; color:white; border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; }
+        button:hover { background:var(--accent); color:black; }
+        #timeline { height: 140px; background:#0a0a0a; overflow-x:auto; padding:10px; white-space:nowrap; position:relative; }
+        .track { height:30px; background:rgba(255,255,255,0.03); margin-bottom:5px; display:flex; position:relative; border-radius:5px; }
+        #playhead { position:absolute; top:0; left:0; width:2px; height:100%; background:red; z-index:100; pointer-events:none; }
+    </style>
+</head>
+<body>
+
+<div id="authOverlay">
+    <h1 style="color:var(--accent);">VIDEO STUDIO PRO</h1>
+    <div class="login-box">
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="pass" placeholder="Password">
+        <button onclick="appStart('login')" style="background:var(--accent); color:black; width:100%;">ULAZ</button>
+    </div>
+    <button onclick="appStart('guest')" style="background:none; color:gray; margin-top:15px;">Nastavi kao Gost</button>
+</div>
+
+<div id="music-library">
+    <button onclick="toggleMusic()" style="width:100%; background:#e74c3c; border:none; color:white; padding:10px; margin-bottom:10px;">ZATVORI X</button>
+    <!-- Ovi linkovi su sa Pixabay-a i provereno rade na GitHub-u -->
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Vine Boom')">🔊 OG Vine Boom</div>
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Bruh')">🔊 OG Bruh</div>
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Fail')">🔊 OG Fail</div>
+    <div class="music-item" onclick="addSound('https://pixabay.com', 'Meme Wow')">🔊 OG Wow</div>
+</div>
+
+<div id="preview-zone">
+    <canvas id="mainCanvas"></canvas>
+    <video id="vSource" style="display:none;" playsinline crossorigin="anonymous"></video>
+    <div style="display:flex; width:95%; align-items:center; gap:10px; padding:10px;">
+        <button onclick="togglePlay()">▶/⏸</button>
+        <input type="range" id="seekbar" value="0" step="0.01" style="flex:1;">
+    </div>
+</div>
+
+<div class="toolbar">
+    <label for="vIn">📂 IMPORT VIDEO</label>
+    <input type="file" id="vIn" accept="video/*" style="display:none;">
+    <button onclick="toggleMusic()" style="background:#f39c12; color:black;">🎶 OG SOUNDS</button>
+    <input type="text" id="txtIn" placeholder="Tekst..." style="width:100px; background:#222; border:none; color:white; padding:10px; border-radius:5px;">
+    <button onclick="addText()" style="background:#9b59b6;">➕ TEKST</button>
+    <button onclick="setVoice(1.5)">🐿️ PISKAV</button>
+    <button onclick="setVoice(0.7)">👹 GRUB</button>
+    <button onclick="fastExport()" style="background:#27ae60;">💾 BRZI EXPORT</button>
+</div>
+
+<div id="timeline">
+    <div id="playhead"></div>
+    <div class="track" id="vTrack"></div>
+    <div class="track" id="aTrack" style="background:rgba(52, 152, 219, 0.1);"></div>
+</div>
+
+<script>
+    var video = document.getElementById('vSource');
+    var canvas = document.getElementById('mainCanvas');
+    var ctx = canvas.getContext('2d');
+    var seekbar = document.getElementById('seekbar');
+    var audioCtx, biquadFilter, sourceNode, destNode;
+    var activeTexts = [], activeSounds = [];
+
+    async function appStart(mode) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        document.getElementById('authOverlay').style.display = 'none';
+        render();
+    }
+
+    function setupAudio() {
+        if (!sourceNode && audioCtx) {
+            video.crossOrigin = "anonymous";
+            sourceNode = audioCtx.createMediaElementSource(video);
+            biquadFilter = audioCtx.createBiquadFilter();
+            destNode = audioCtx.createMediaStreamDestination();
+            
+            sourceNode.connect(biquadFilter);
+            biquadFilter.connect(audioCtx.destination);
+            biquadFilter.connect(destNode);
+        }
+    }
+
+    function toggleMusic() { document.getElementById('music-library').classList.toggle('open'); }
+
+    function addSound(url, name) {
+        if(!audioCtx) return;
+        let s = new Audio(url);
+        s.crossOrigin = "anonymous";
+        // Povezujemo i eksterne zvukove u export stream
+        let sSource = audioCtx.createMediaElementSource(s);
+        sSource.connect(audioCtx.destination);
+        sSource.connect(destNode); 
+
+        activeSounds.push({ audio: s, start: video.currentTime, name: name, played: false });
+        alert("Dodato: " + name);
+    }
+
+    document.getElementById('vIn').onchange = (e) => {
+        video.src = URL.createObjectURL(e.target.files[0]);
+        video.onloadeddata = () => {
+            seekbar.max = video.duration;
+            canvas.width = 1280; canvas.height = 720;
+            drawTimeline();
+        };
+    };
+
+    function render() {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        activeTexts.forEach(t => {
+            if(video.currentTime >= t.start && video.currentTime <= t.end) {
+                ctx.fillStyle = "white"; ctx.font = "bold 60px sans-serif";
+                ctx.textAlign = "center"; ctx.fillText(t.content, canvas.width/2, 620);
+            }
+        });
+        activeSounds.forEach(s => {
+            if(video.currentTime >= s.start && !s.played && !video.paused) {
+                s.audio.currentTime = 0; s.audio.play(); s.played = true;
+            }
+            if(video.currentTime < s.start) s.played = false;
+        });
+        requestAnimationFrame(render);
+    }
+
+    function setVoice(p) {
+        setupAudio();
+        video.playbackRate = p;
+        if(biquadFilter) {
+            biquadFilter.type = p > 1 ? "highpass" : "lowpass";
+            biquadFilter.frequency.setTargetAtTime(p > 1 ? 3000 : 500, audioCtx.currentTime, 0.1);
+        }
+    }
+
+    function togglePlay() { video.paused ? video.play() : video.pause(); }
+
+    async function fastExport() {
+        setupAudio();
+        const canvasStream = canvas.captureStream(30);
+        const finalStream = new MediaStream([
+            ...canvasStream.getVideoTracks(),
+            ...destNode.stream.getAudioTracks()
+        ]);
+
+        const recorder = new MediaRecorder(finalStream, { mimeType: 'video/webm' });
+        let chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/mp4' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'GGLOL_Studio_Export.mp4'; a.click();
+            video.playbackRate = 1;
+        };
+        
+        video.currentTime = 0;
+        activeSounds.forEach(s => s.played = false);
+        video.playbackRate = 2.0; // Export ide 2x brže radi stabilnosti zvuka
+        recorder.start();
+        video.play();
+        video.onended = () => recorder.stop();
+    }
+
+    function drawTimeline() {
+        const vTrack = document.getElementById('vTrack');
+        vTrack.innerHTML = "";
+        for(let i=0; i <= video.duration; i++) {
+            let f = document.createElement('div');
+            f.style.minWidth = "40px"; f.style.borderRight = "1px solid #333"; f.innerText = i + "s";
+            vTrack.appendChild(f);
+        }
+    }
+
+    seekbar.oninput = (e) => { video.currentTime = e.target.value; };
+    video.ontimeupdate = () => {
+        seekbar.value = video.currentTime;
+        document.getElementById('playhead').style.left = (video.currentTime / video.duration * 100) + "%";
+    };
+
+    function addText() {
+        let val = document.getElementById('txtIn').value;
+        if(val) activeTexts.push({ content: val, start: video.currentTime, end: video.currentTime + 2 });
+    }
+</script>
+</body>
+</html>
