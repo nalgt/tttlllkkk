@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VL Studio Pro</title>
+    <style>
+        :root { --accent: #ff4444; --bg: #0b0b0b; --cut: #e74c3c; --ai: #9b59b6; }
+        body { font-family: sans-serif; background: var(--bg); color: white; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #preview-zone { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000; padding: 10px; }
+        canvas { max-width: 100%; max-height: 50vh; border: 2px solid #333; border-radius: 8px; }
+        .controls { background: #1a1a1a; padding: 15px; border-top: 1px solid #333; }
+        .row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        button, label { background: #333; color: white; border: none; padding: 12px; border-radius: 6px; cursor: pointer; font-size: 11px; flex: 1; text-align: center; font-weight: bold; }
+        button:active { background: var(--accent); }
+        input[type="text"] { flex: 2; padding: 10px; border-radius: 6px; border: none; background: #2a2a2a; color: white; }
+        input[type="range"] { flex: 1; accent-color: var(--accent); }
+        #timer { font-family: monospace; font-size: 14px; color: var(--accent); }
+    </style>
+</head>
+<body>
+
+<div id="preview-zone">
+    <canvas id="mainCanvas"></canvas>
+    <video id="vSource" style="display:none;" playsinline crossorigin="anonymous"></video>
+    <audio id="aSource" style="display:none;" crossorigin="anonymous" loop></audio>
+    <div class="row" style="width: 100%; margin-top: 10px;">
+        <span id="timer">0.0s</span>
+        <input type="range" id="seekbar" value="0" step="0.01" style="flex: 1;">
+    </div>
+</div>
+
+<div class="controls">
+    <div class="row">
+        <input type="text" id="aiText" placeholder="Ukucaj tekst (SRB ili ENG)...">
+        <button onclick="addAI()" style="background:var(--ai);">🎙️ DODAJ AI</button>
+    </div>
+    
+    <div class="row">
+        <label>📁 VIDEO<input type="file" id="vIn" accept="video/*" style="display:none;"></label>
+        <label style="color:var(--accent);">🎵 MP3<input type="file" id="aIn" accept="audio/*" style="display:none;"></label>
+        <button onclick="togglePlay()" id="playBtn">▶ PUSTI</button>
+    </div>
+
+    <div class="row">
+        <button onclick="setPoint('start')">📍 OD</button>
+        <button onclick="setPoint('end')">📍 DO</button>
+        <button onclick="applyCut()" style="background:var(--cut);">✂️ SEČI</button>
+    </div>
+
+    <div class="row">
+        <button onclick="startExport()" style="background:#27ae60;">💾 SNIMI FINAL</button>
+        <button onclick="undo()" style="background:#555;">↩️ UNDO</button>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('vSource');
+    const audio = document.getElementById('aSource');
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+    const seekbar = document.getElementById('seekbar');
+    
+    let cuts = [], aiMsgs = [], startP = -1, endP = -1;
+
+    // --- UČITAVANJE ---
+    document.getElementById('vIn').onchange = (e) => {
+        video.src = URL.createObjectURL(e.target.files[0]);
+        video.onloadedmetadata = () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            seekbar.max = video.duration;
+        };
+    };
+    document.getElementById('aIn').onchange = (e) => { audio.src = URL.createObjectURL(e.target.files[0]); audio.loop = true; };
+
+    // --- AI GLAS (TEČAN GOVOR) ---
+    function addAI() {
+        const txt = document.getElementById('aiText').value;
+        if(!txt) return;
+        // Detekcija jezika (prosta provera za engleske reči)
+        const isEng = /[a-zA-Z]/.test(txt) && !/[čćžšđ]/.test(txt.toLowerCase());
+        aiMsgs.push({ t: txt, time: video.currentTime, lang: isEng ? 'en-US' : 'sr-RS', d: false });
+        document.getElementById('aiText').value = "";
+        alert("Glas dodat!");
+    }
+
+    function checkAI() {
+        aiMsgs.forEach(m => {
+            if(video.currentTime >= m.time && !m.d && !video.paused) {
+                const s = new SpeechSynthesisUtterance(m.t);
+                s.lang = m.lang;
+                s.rate = 1.0; 
+                window.speechSynthesis.speak(s);
+                m.d = true;
+            }
+            if(video.currentTime < m.time - 0.5) m.d = false;
+        });
+    }
+
+    // --- SEČENJE (FIXED) ---
+    function setPoint(t) {
+        if(t==='start') startP = video.currentTime;
+        else endP = video.currentTime;
+    }
+
+    function applyCut() {
+        if(startP !== -1 && endP !== -1) {
+            cuts.push({ s: Math.min(startP, endP), e: Math.max(startP, endP) });
+            startP = -1; endP = -1;
+            alert("Deo isečen!");
+        }
+    }
+
+    function render() {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // Ripple Cut: Preskoči isečene delove
+        cuts.forEach(c => {
+            if(video.currentTime >= c.s && video.currentTime < c.e) {
+                video.currentTime = c.e;
+            }
+        });
+
+        checkAI();
+
+        if(!video.paused) {
+            seekbar.value = video.currentTime;
+            document.getElementById('timer').innerText = video.currentTime.toFixed(1) + "s";
+        }
+        requestAnimationFrame(render);
+    }
+
+    function togglePlay() {
+        if(video.paused) { video.play(); audio.play(); document.getElementById('playBtn').innerText = "⏸ PAUZA"; }
+        else { video.pause(); audio.pause(); document.getElementById('playBtn').innerText = "▶ PUSTI"; }
+    }
+
+    function undo() { cuts.pop(); aiMsgs.pop(); }
+
+    async function startExport() {
+        const stream = canvas.captureStream(30);
+        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        const chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'VL_PRO_EDIT.webm'; a.click();
+        };
+        video.currentTime = 0;
+        video.play(); audio.play();
+        recorder.start();
+        video.onended = () => recorder.stop();
+        alert("Snimanje u toku... Sačekaj kraj videa!");
+    }
+
+    seekbar.oninput = () => { video.currentTime = seekbar.value; };
+    render();
+</script>
+</body>
+</html>
